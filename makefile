@@ -1,10 +1,10 @@
 PROJECTS := kalypso-listener generator-client 
 all: $(PROJECTS)
 
-kalypso-generator:
+kalypso-listener:
 	@echo "Building kalypso-listener... "
-	@cd dependencies/listener && cargo build --target x86_64-unknown-linux-gnu --release -p listener
-	@cp dependencies/listener/target/x86_64-unknown-linux-gnu/release/listener kalypso-listener
+	@cd dependencies/kalypso-unified && cargo build --target x86_64-unknown-linux-gnu --release -p listener
+	@cp dependencies/kalypso-unified/target/x86_64-unknown-linux-gnu/release/listener kalypso-listener
 
 generator-client:
 	@echo "Building generator-client... "

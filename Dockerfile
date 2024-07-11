@@ -66,5 +66,10 @@ RUN chmod +x generator-client
 COPY kalypso-listener ./
 RUN chmod +x kalypso-listener
 
+COPY prover-executable ./
+RUN chmod +x prover-executable
+
+COPY config.toml ./
+
 # entry point
 ENTRYPOINT [ "/app/setup.sh" ]

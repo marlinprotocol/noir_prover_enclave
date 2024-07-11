@@ -9,7 +9,7 @@ kalypso-listener:
 generator-client:
 	@echo "Building generator-client... "
 	@cd dependencies/kalypso-unified && cargo build --target x86_64-unknown-linux-gnu --release -p generator_client
-	@cp dependencies/kalypso-unified/target/x86_64-unknown-linux-gnu/release/generator-client generator-client
+	@cp dependencies/kalypso-unified/target/x86_64-unknown-linux-gnu/release/generator_client generator-client
 
 
 .PHONY: clone-repos

@@ -157,19 +157,12 @@ async fn get_signed_proof(
         .await
         .unwrap();
 
-    // Construct the proof response
-    let prove = GenerateProofResponse {
-        input: ethers::types::Bytes::from(public_inputs.to_vec()),
-        execution: ethers::types::Bytes::from(proof_bytes.to_vec()),
-        verification_status: true,
-        signature: format!("0x{}", signature.to_string()),
-    };
 
-    let sig_bytes = ethers::types::Bytes::from_str(&prove.signature).unwrap();
+    let sig_bytes: Bytes = signature.to_vec().into();
     // Encode the proof response
     let value = vec![
-        ethers::abi::Token::Bytes(prove.input.to_vec()),
-        ethers::abi::Token::Bytes(prove.execution.to_vec()),
+        ethers::abi::Token::Bytes(public_inputs.to_vec()),
+        ethers::abi::Token::Bytes(proof_bytes.to_vec()),
         ethers::abi::Token::Bytes(sig_bytes.to_vec()),
     ];
     let encoded = ethers::abi::encode(&value);

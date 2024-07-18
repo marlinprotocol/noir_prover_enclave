@@ -2,7 +2,6 @@ use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use ethers::core::types::{Address, U256};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::Bytes;
-use secp256k1;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
@@ -11,18 +10,8 @@ use std::fs::File;
 use std::io::Write;
 use std::io::{Error, ErrorKind};
 use std::process::{Command, Stdio};
-use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use toml;
-
-#[derive(Debug, Serialize)]
-struct GenerateProofResponse {
-    input: Bytes,
-    execution: Bytes,
-    verification_status: bool,
-    signature: String,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct Ask {
@@ -100,7 +89,9 @@ async fn generate_proof(
                         "Failed to read output file: {:?} for file {:?}",
                         err, file_path
                     ),
-                    data: Bytes::new(),
+                    data: get_signed_proof_for_invalid_inputs(inputs.0)
+                        .await
+                        .expect("Failed generating signature for invalid inputs"),
                 }),
             }
         }
@@ -111,6 +102,57 @@ async fn generate_proof(
     }
 }
 
+async fn get_signed_proof_for_invalid_inputs(
+    inputs: GenerateProofInputs,
+) -> Result<Bytes, Box<dyn std::error::Error>> {
+    let read_secp_private_key = fs::read("/app/secp.sec").expect("/app/secp.sec file not found");
+    let secp_private_key = secp256k1::SecretKey::from_slice(&read_secp_private_key)
+        .expect("Failed reading /app/secp.sec")
+        .display_secret()
+        .to_string();
+    let signer_wallet = secp_private_key
+        .parse::<LocalWallet>()
+        .expect("Failed Created signer_wallet");
+
+    // solidity code against which the dispute is settled
+    // function _checkDisputeUsingSignature(
+    //     uint256 askId,
+    //     bytes memory proverData,
+    //     bytes memory invalidProofSignature,
+    //     bytes32 familyId
+    // ) internal view returns (bool) {
+    //     bytes32 messageHash = keccak256(abi.encode(askId, proverData));
+
+    //     bytes32 ethSignedMessageHash = messageHash.GET_ETH_SIGNED_HASHED_MESSAGE();
+
+    //     address signer = ECDSAUpgradeable.recover(ethSignedMessageHash, invalidProofSignature);
+    //     if (signer == address(0)) {
+    //         revert Error.InvalidEnclaveSignature(signer);
+    //     }
+
+    //     ENTITY_KEY_REGISTRY.allowOnlyVerifiedFamily(familyId, signer);
+    //     return true;
+    // }
+
+    let ask_id = inputs.ask_id;
+    let prover_data = inputs.ask.prover_data;
+    let value = vec![
+        ethers::abi::Token::Uint(U256::from(ask_id)),
+        ethers::abi::Token::Bytes(prover_data.to_vec()),
+    ];
+
+    let encoded = ethers::abi::encode(&value);
+    let digest = ethers::utils::keccak256(encoded);
+
+    // Sign the message digest
+    let signature = signer_wallet
+        .sign_message(ethers::types::H256(digest))
+        .await
+        .expect("Failed Creating signature get_signed_proof_for_invalid_inputs()");
+
+    Ok(signature.to_vec().into())
+}
+
 async fn get_signed_proof(
     inputs: &GenerateProofInputs,
     proof: Bytes,
@@ -118,10 +160,12 @@ async fn get_signed_proof(
     // Read the secp256k1 private key from file
     let read_secp_private_key = fs::read("/app/secp.sec").expect("/app/secp.sec file not found");
     let secp_private_key = secp256k1::SecretKey::from_slice(&read_secp_private_key)
-        .unwrap()
+        .expect("Failed reading secp_private_key get_signed_proof()")
         .display_secret()
         .to_string();
-    let signer_wallet = secp_private_key.parse::<LocalWallet>().unwrap();
+    let signer_wallet = secp_private_key
+        .parse::<LocalWallet>()
+        .expect("Failed creating signer_wallet get_signed_proof()");
 
     // Prepare the data for signing
     let public_inputs = inputs.ask.prover_data.clone();
@@ -155,8 +199,7 @@ async fn get_signed_proof(
     let signature = signer_wallet
         .sign_message(ethers::types::H256(digest))
         .await
-        .unwrap();
-
+        .expect("Failed creating signature get_signed_proof()");
 
     let sig_bytes: Bytes = signature.to_vec().into();
     // Encode the proof response
@@ -166,8 +209,7 @@ async fn get_signed_proof(
         ethers::abi::Token::Bytes(sig_bytes.to_vec()),
     ];
     let encoded = ethers::abi::encode(&value);
-    let encoded_bytes: ethers::types::Bytes = encoded.into();
-    Ok(encoded_bytes)
+    Ok(encoded.into())
 }
 
 fn write_private_inputs_to_toml(
@@ -200,13 +242,13 @@ async fn execute_prove_command(
 ) -> Result<String, Error> {
     let ask_id = inputs.ask_id;
     let toml_file_path = format!("{}/{}.toml", toml_path, ask_id);
-    let output_file_path = format!("{}", output_path);
+    let output_file_path = output_path.to_string();
 
     let mut cmd = Command::new("nargo");
     cmd.arg("prove")
         .arg("-p")
         .arg(&toml_file_path)
-        .current_dir(&toml_path)
+        .current_dir(toml_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -228,6 +270,7 @@ fn read_output_file(file_path: &str) -> Result<String, std::io::Error> {
     fs::read_to_string(file_path)
 }
 
+#[allow(unused)]
 async fn test() -> impl Responder {
     let response_json = json!({
         "message": "Not implemented."
@@ -236,6 +279,7 @@ async fn test() -> impl Responder {
     actix_web::HttpResponse::Ok().json(response_json)
 }
 
+#[allow(unused)]
 async fn benchmark() -> impl Responder {
     let response_json = json!({
         "message": "Not implemented."
@@ -248,7 +292,8 @@ async fn benchmark() -> impl Responder {
 async fn main() -> std::io::Result<()> {
     let config_path = "/app/config.toml";
     let config: Config =
-        toml::from_str(&fs::read_to_string(config_path).expect("/app/config.toml not found"))?;
+        toml::from_str(&fs::read_to_string(config_path).expect("/app/config.toml not found"))
+            .expect("Could not parse the config.toml file");
     let config_data = web::Data::new(Arc::new(Mutex::new(config)));
     let lock = web::Data::new(Arc::new(Mutex::new(()))); // Create a lock
     HttpServer::new(move || {

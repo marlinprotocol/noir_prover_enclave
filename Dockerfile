@@ -13,7 +13,13 @@ RUN curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | ba
 # Add noirup directory to PATH and ensure it's sourced
 ENV PATH="/root/.nargo/bin:${PATH}"
 RUN echo 'export PATH="$HOME/.nargo/bin:$PATH"' >> ~/.bashrc && \
-    bash -c "source ~/.profile && noirup"
+    bash -c "source ~/.profile && noirup --version 0.31.0"
+    
+RUN curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/master/barretenberg/cpp/installation/install | bash
+
+ENV PATH="/root/.bb:${PATH}"
+RUN echo 'export PATH="$HOME/.bb:$PATH"' >> ~/.bashrc && \
+    bash -c "source ~/.profile && bbup -v 0.41.0"
 
 # working directory
 WORKDIR /app

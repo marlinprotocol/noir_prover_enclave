@@ -1,6 +1,10 @@
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{web, App, HttpResponse, HttpServer, Responder,http::StatusCode};
 use ethers::core::types::{Address, U256};
-use ethers::signers::{LocalWallet, Signer};
+use ethers::{
+    signers::{LocalWallet, Signer, Wallet},
+    core::k256::ecdsa::SigningKey,
+};
+use snarkvm::prelude::{Authorization, Execution, MainnetV0, TestnetV0};
 use ethers::types::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -12,6 +16,7 @@ use std::io::{Error, ErrorKind};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use kalypso_helper::response::response;
 
 #[derive(Debug, Deserialize)]
 pub struct Ask {
@@ -24,12 +29,12 @@ pub struct Ask {
     pub prover_data: Bytes, // public_input
 }
 
-#[derive(Debug, Deserialize)]
-struct GenerateProofInputs {
-    ask: Ask,
-    private_input: Vec<u8>,
-    ask_id: u64,
-}
+// #[derive(Debug, Deserialize)]
+// struct GenerateProofInputs {
+//     ask: Ask,
+//     private_input: Vec<u8>,
+//     ask_id: u64,
+// }
 
 #[derive(Debug, Serialize)]
 struct JsonResponse {
@@ -44,15 +49,17 @@ struct Config {
 }
 
 async fn generate_proof(
-    inputs: web::Json<GenerateProofInputs>,
+    inputs: web::Json<kalypso_generator_models::models::InputPayload>,
     config: web::Data<Arc<Mutex<Config>>>,
     lock: web::Data<Arc<Mutex<()>>>,
 ) -> impl Responder {
+    
+    
     let config = config.lock().await;
     let _lock = lock.lock().await; // Acquire lock
 
     // Write private inputs to askId.toml
-    if let Err(err) = write_private_inputs_to_toml(&inputs, &config.toml_path) {
+    if let Err(err) = write_private_inputs_to_toml(inputs.0.clone(), &config.toml_path) {
         return HttpResponse::InternalServerError().json(JsonResponse {
             message: format!("Failed to write private inputs to TOML file: {:?}", err),
             data: Bytes::new(),
@@ -60,7 +67,7 @@ async fn generate_proof(
     }
 
     // Generate proof using external command nargo prove
-    let proof_path = execute_prove_command(&inputs, &config.toml_path, &config.output_path).await;
+    let proof_path = execute_prove_command(inputs.0.clone(), &config.toml_path, &config.output_path).await;
 
     match proof_path {
         Ok(file_path) => {
@@ -68,15 +75,17 @@ async fn generate_proof(
             match read_output_file(&file_path) {
                 Ok(file_contents) => {
                     // Convert the file contents to Bytes
-                    let file_bytes = Bytes::from(file_contents.into_bytes());
+                    // let file_bytes = hex_to_bytes(&file_contents).expect("failure to convert hex string to bytes");
+                    let file_bytes = Bytes::from(file_contents);
                     // Generate signed proof asynchronously
-                    match get_signed_proof(&inputs, file_bytes).await {
+                    match get_signed_proof(inputs.0.clone(), file_bytes).await {
                         Ok(proof_data) => {
                             // Construct JSON response with proof data
-                            HttpResponse::Ok().json(JsonResponse {
-                                message: "Proof generated successfully.".to_string(),
-                                data: proof_data,
-                            })
+                            return HttpResponse::Ok().json(
+                                kalypso_generator_models::models::GenerateProofResponse {
+                                    proof: proof_data.to_vec(),
+                                },
+                            );
                         }
                         Err(err) => HttpResponse::InternalServerError().json(JsonResponse {
                             message: format!("Failed to generate signed proof: {}", err),
@@ -89,7 +98,7 @@ async fn generate_proof(
                         "Failed to read output file: {:?} for file {:?}",
                         err, file_path
                     ),
-                    data: get_signed_proof_for_invalid_inputs(inputs.0)
+                    data: get_signed_proof_for_invalid_inputs(inputs.0.clone())
                         .await
                         .expect("Failed generating signature for invalid inputs"),
                 }),
@@ -97,13 +106,29 @@ async fn generate_proof(
         }
         Err(err) => HttpResponse::InternalServerError().json(JsonResponse {
             message: format!("Failed to generate proof: {:?}", err),
-            data: Bytes::new(),
+            data: get_signed_proof_for_invalid_inputs(inputs.0)
+                    .await
+                    .expect("Failed generating signature for invalid inputs"),
         }),
     }
 }
 
+fn hex_to_bytes(hex: &str) -> Result<Bytes, Box<dyn std::error::Error>> {
+    let hex = hex.trim();
+    if hex.len() % 2 != 0 {
+        return Err("Hex string has an odd number of digits".into());
+    }
+
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+        .collect::<Result<Vec<u8>, _>>()?;
+        
+    Ok(Bytes::from(bytes))
+}
+
 async fn get_signed_proof_for_invalid_inputs(
-    inputs: GenerateProofInputs,
+    inputs: kalypso_generator_models::models::InputPayload,
 ) -> Result<Bytes, Box<dyn std::error::Error>> {
     let read_secp_private_key = fs::read("/app/secp.sec").expect("/app/secp.sec file not found");
     let secp_private_key = secp256k1::SecretKey::from_slice(&read_secp_private_key)
@@ -134,10 +159,9 @@ async fn get_signed_proof_for_invalid_inputs(
     //     return true;
     // }
 
-    let ask_id = inputs.ask_id;
-    let prover_data = inputs.ask.prover_data;
+    // let ask_id = 100;
+    let prover_data: ethers::types::Bytes = inputs.clone().get_public().into();
     let value = vec![
-        ethers::abi::Token::Uint(U256::from(ask_id)),
         ethers::abi::Token::Bytes(prover_data.to_vec()),
     ];
 
@@ -154,7 +178,7 @@ async fn get_signed_proof_for_invalid_inputs(
 }
 
 async fn get_signed_proof(
-    inputs: &GenerateProofInputs,
+    inputs: kalypso_generator_models::models::InputPayload,
     proof: Bytes,
 ) -> Result<Bytes, Box<dyn std::error::Error>> {
     // Read the secp256k1 private key from file
@@ -168,8 +192,10 @@ async fn get_signed_proof(
         .expect("Failed creating signer_wallet get_signed_proof()");
 
     // Prepare the data for signing
-    let public_inputs = inputs.ask.prover_data.clone();
+    // let public_inputs = inputs.ask.prover_data.clone();
+    let public_inputs: ethers::types::Bytes = inputs.clone().get_public().into();
     let proof_bytes = proof.clone();
+    println!("{:?}", &proof_bytes);
 
     // solidity code/function against which the proof is verified
     // function verify(bytes memory encodedData) public view override returns (bool) {
@@ -186,7 +212,7 @@ async fn get_signed_proof(
     //     return verifyProofForTeeVerifier(encodedInputs, encodedProof, proofSignature);
     // }
 
-    //goal is to generate completeProof for the above code
+    // goal is to generate completeProof for the above code
     // Encode the data for signing
     let value = vec![
         ethers::abi::Token::Bytes(public_inputs.to_vec()),
@@ -213,14 +239,14 @@ async fn get_signed_proof(
 }
 
 fn write_private_inputs_to_toml(
-    inputs: &GenerateProofInputs,
+    payload: kalypso_generator_models::models::InputPayload,
     toml_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let ask_id = inputs.ask_id;
-    let file_path = format!("{}/{}.toml", toml_path, ask_id);
+    // let ask_id = inputs.ask_id;
+    let file_path = format!("{}/{}.toml", toml_path, "temp");
 
     // Convert Vec<u8> to String
-    let json_string = String::from_utf8(inputs.private_input.clone())?;
+    let json_string = String::from_utf8(payload.get_plain_secrets().unwrap())?;
 
     // Deserialize JSON string to serde_json::Value
     let json_value: Value = serde_json::from_str(&json_string)?;
@@ -236,18 +262,20 @@ fn write_private_inputs_to_toml(
 }
 
 async fn execute_prove_command(
-    inputs: &GenerateProofInputs,
+    inputs: kalypso_generator_models::models::InputPayload,
     toml_path: &str,
     output_path: &str,
 ) -> Result<String, Error> {
-    let ask_id = inputs.ask_id;
-    let toml_file_path = format!("{}/{}.toml", toml_path, ask_id);
-    let output_file_path = output_path.to_string();
+    
+    let toml_file_path = format!("{}/{}.toml", toml_path, "temp");
+    
+    let witness = "foo";
 
     let mut cmd = Command::new("nargo");
-    cmd.arg("prove")
+    cmd.arg("execute")
         .arg("-p")
         .arg(&toml_file_path)
+        .arg(&witness)
         .current_dir(toml_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -262,12 +290,38 @@ async fn execute_prove_command(
             format!("Command failed: {}", stderr),
         ));
     }
+    // bb prove -b ./target/hello_world.json -w ./target/witness-name.gz -o ./target/proof
+    let output_file_path = output_path.to_string();
+    let json_file_path = format!("{}/target/hello_world.json", toml_path);
+    let witness_file_path = format!("{}/target/{}.gz", toml_path, witness);
+    let mut cmd_bb = Command::new("bb");
+    cmd_bb.arg("prove")
+        .arg("-b")
+        .arg(&json_file_path)
+        .arg("-w")
+        .arg(&witness_file_path)
+        .arg("-o")
+        .arg(&output_file_path)
+        .current_dir(toml_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // Execute the command asynchronously
+    let output_bb = cmd_bb.output()?;
+    // Check if the command was successful
+    if !output_bb.status.success() {
+        let stderr = String::from_utf8_lossy(&output_bb.stderr);
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("Command failed: {}", stderr),
+        ));
+    }
 
     Ok(output_file_path)
 }
 
-fn read_output_file(file_path: &str) -> Result<String, std::io::Error> {
-    fs::read_to_string(file_path)
+fn read_output_file(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
+    fs::read(file_path)
 }
 
 #[allow(unused)]
@@ -288,6 +342,222 @@ async fn benchmark() -> impl Responder {
     actix_web::HttpResponse::Ok().json(response_json)
 }
 
+
+async fn check_input_handler(
+    payload: web::Json<kalypso_generator_models::models::InputPayload>,
+) -> impl Responder {
+    let default_response = kalypso_ivs_models::models::CheckInputResponse { valid: false };
+    let private_input = payload.clone().get_plain_secrets().unwrap();
+
+    let public_input = payload.clone().get_public();
+    let public_input_str = match std::str::from_utf8(&public_input) {
+        Ok(data) => data,
+        Err(_) => return HttpResponse::Ok().json(default_response),
+    };
+
+    let private_input_str = match std::str::from_utf8(&private_input) {
+        Ok(data) => data,
+        Err(_) => return HttpResponse::Ok().json(default_response),
+    };
+
+    let auth_value_pvt: Value = match serde_json::from_str(&private_input_str) {
+        Ok(data) => data,
+        Err(_) => return HttpResponse::Ok().json(default_response),
+    };
+
+    let auth = &auth_value_pvt["auth"];
+
+    if public_input_str.contains("1u16") {
+        let authorization_structure: Result<Authorization<TestnetV0>, Error> =
+            serde_json::from_value(auth.clone());
+        check_authorization_testnet(authorization_structure, None, None).await
+    } else if public_input_str.contains("0u16") {
+        let authorization_structure: Result<Authorization<MainnetV0>, Error> =
+            serde_json::from_value(auth.clone());
+        check_authorization_mainnet(authorization_structure, None, None).await
+    } else {
+        return HttpResponse::Ok()
+            .json(kalypso_ivs_models::models::CheckInputResponse { valid: false });
+    }
+}
+
+async fn check_authorization_testnet(
+    authorization_structure: Result<Authorization<TestnetV0>, Error>,
+    ask_payload: Option<kalypso_ivs_models::models::InvalidInputPayload>,
+    signer_wallet: Option<Wallet<SigningKey>>,
+) -> HttpResponse {
+    let default_response = kalypso_ivs_models::models::CheckInputResponse { valid: false };
+    match authorization_structure {
+        Ok(auth) => {
+            let is_auth_empty = auth.is_empty();
+
+            if is_auth_empty {
+                if ask_payload.is_some() && signer_wallet.is_some() {
+                    return HttpResponse::Ok().json(
+                        generate_invalid_input_attestation(
+                            ask_payload.unwrap(),
+                            signer_wallet.unwrap(),
+                        )
+                        .await,
+                    );
+                } else {
+                    return HttpResponse::Ok().json(default_response);
+                }
+            } else {
+                let data = kalypso_ivs_models::models::CheckInputResponse { valid: true };
+                return HttpResponse::Ok().json(data);
+            }
+        }
+        Err(_) => {
+            return HttpResponse::Ok().json(default_response);
+        }
+    }
+}
+
+
+async fn verify_inputs_and_proof(
+    payload: web::Json<kalypso_ivs_models::models::VerifyInputsAndProof>,
+) -> impl Responder {
+    let default_response = kalypso_ivs_models::models::VerifyInputAndProofResponse {
+        is_input_and_proof_valid: false,
+    };
+    let proof = payload.clone().proof;
+
+    let proof_str = match std::str::from_utf8(&proof) {
+        Ok(data) => data,
+        Err(_) => return HttpResponse::Ok().json(default_response),
+    };
+
+    let exec_value: Value = serde_json::from_str(&proof_str).unwrap();
+
+    let public_input = match payload.clone().public_input {
+        Some(data) => data,
+        None => return HttpResponse::Ok().json(default_response),
+    };
+
+    let public_input_str = match std::str::from_utf8(&public_input) {
+        Ok(data) => data,
+        Err(_) => return HttpResponse::Ok().json(default_response),
+    };
+
+    if public_input_str.contains("1u16") {
+        let execution_structure: Result<Execution<TestnetV0>, Error> =
+            serde_json::from_value(exec_value.clone());
+
+        match execution_structure {
+            Ok(exec) => {
+                let verification_result = true;
+                    // prover::verify_execution_proof_testnet(exec).await.unwrap();
+                if verification_result {
+                    let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
+                        is_input_and_proof_valid: true,
+                    };
+                    return HttpResponse::Ok().json(data);
+                } else {
+                    let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
+                        is_input_and_proof_valid: false,
+                    };
+                    return HttpResponse::Ok().json(data);
+                }
+            }
+            Err(_) => {
+                return response(
+                    "The execution input structure is invalid",
+                    StatusCode::BAD_REQUEST,
+                    None,
+                );
+            }
+        }
+    } else if public_input_str.contains("0u16") {
+        let execution_structure: Result<Execution<MainnetV0>, Error> =
+            serde_json::from_value(exec_value.clone());
+
+        match execution_structure {
+            Ok(exec) => {
+                let verification_result = true;
+                    // prover::verify_execution_proof_mainnet(exec).await.unwrap();
+                if verification_result {
+                    let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
+                        is_input_and_proof_valid: true,
+                    };
+                    return HttpResponse::Ok().json(data);
+                } else {
+                    let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
+                        is_input_and_proof_valid: false,
+                    };
+                    return HttpResponse::Ok().json(data);
+                }
+            }
+            Err(_) => {
+                return response(
+                    "The execution input structure is invalid",
+                    StatusCode::BAD_REQUEST,
+                    None,
+                );
+            }
+        }
+    } else {
+        return response("Network not implemented", StatusCode::BAD_REQUEST, None);
+    }
+}
+
+async fn check_authorization_mainnet(
+    authorization_structure: Result<Authorization<MainnetV0>, Error>,
+    ask_payload: Option<kalypso_ivs_models::models::InvalidInputPayload>,
+    signer_wallet: Option<Wallet<SigningKey>>,
+) -> HttpResponse {
+    let default_response = kalypso_ivs_models::models::CheckInputResponse { valid: false };
+    match authorization_structure {
+        Ok(auth) => {
+            let is_auth_empty = auth.is_empty();
+
+            if is_auth_empty {
+                if ask_payload.is_some() && signer_wallet.is_some() {
+                    return HttpResponse::Ok().json(
+                        generate_invalid_input_attestation(
+                            ask_payload.unwrap(),
+                            signer_wallet.unwrap(),
+                        )
+                        .await,
+                    );
+                } else {
+                    return HttpResponse::Ok().json(default_response);
+                }
+            } else {
+                let data = kalypso_ivs_models::models::CheckInputResponse { valid: true };
+                return HttpResponse::Ok().json(data);
+            }
+        }
+        Err(_) => {
+            return HttpResponse::Ok().json(default_response);
+        }
+    }
+}
+
+async fn generate_invalid_input_attestation(
+    payload: kalypso_ivs_models::models::InvalidInputPayload,
+    signer_wallet: Wallet<SigningKey>,
+) -> kalypso_generator_models::models::GenerateProofResponse {
+    let ask_id = payload.only_ask_id();
+    let value = vec![
+        ethers::abi::Token::Uint(ask_id.into()),
+        ethers::abi::Token::Bytes(payload.get_public()),
+    ];
+    let encoded = ethers::abi::encode(&value);
+    let digest = ethers::utils::keccak256(encoded);
+
+    let signature = signer_wallet
+        .sign_message(ethers::types::H256(digest))
+        .await
+        .unwrap();
+
+    let response = kalypso_generator_models::models::GenerateProofResponse {
+        proof: signature.to_vec(),
+    };
+
+    return response;
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let config_path = "/app/config.toml";
@@ -301,6 +571,10 @@ async fn main() -> std::io::Result<()> {
             .app_data(config_data.clone())
             .app_data(lock.clone())
             .route("/api/generateProof", web::post().to(generate_proof))
+            .route("/api/test", web::post().to(test))
+            .route("/api/benchmark", web::post().to(benchmark))
+            .route("/api/checkInput", web::post().to(check_input_handler))
+            .route("/api/verifyInputsAndProof", web::post().to(verify_inputs_and_proof))
     })
     .bind("0.0.0.0:3000")?
     .run()

@@ -13,3 +13,13 @@ serde_json = "1.0"
 toml = "0.5"
 ethers ={version = "2.0.10", features = ["abigen", "ws", "rustls"] }
 secp256k1 = "0.28.0"
+
+snarkvm = { features = [], git = "https://github.com/AleoNet/snarkVM", rev = "d170a9f", optional = true }
+
+kalypso_ivs_models = { git = "https://github.com/marlinprotocol/kalypso-unified.git", branch = "listener-refined", package = "ivs" }
+kalypso_generator_models = { git = "https://github.com/marlinprotocol/kalypso-unified.git", branch = "listener-refined", package = "generator" }
+kalypso_helper = { git = "https://github.com/marlinprotocol/kalypso-unified.git", branch = "listener-refined", package = "helper" }
+
+[features]
+default = ["snarkvm"]
+snarkvm = ["dep:snarkvm"]

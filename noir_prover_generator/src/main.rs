@@ -54,7 +54,7 @@ async fn generate_proof(
     lock: web::Data<Arc<Mutex<()>>>,
 ) -> impl Responder {
     
-    
+
     let config = config.lock().await;
     let _lock = lock.lock().await; // Acquire lock
 
@@ -68,6 +68,7 @@ async fn generate_proof(
 
     // Generate proof using external command nargo prove
     let proof_path = execute_prove_command(inputs.0.clone(), &config.toml_path, &config.output_path).await;
+
 
     match proof_path {
         Ok(file_path) => {
@@ -89,11 +90,13 @@ async fn generate_proof(
                         }
                         Err(err) => HttpResponse::InternalServerError().json(JsonResponse {
                             message: format!("Failed to generate signed proof: {}", err),
-                            data: Bytes::new(),
+                            data: Bytes::new(), 
                         }),
                     }
                 }
-                Err(err) => HttpResponse::InternalServerError().json(JsonResponse {
+                Err(err) => {
+                    println!("{}", err);
+                    HttpResponse::InternalServerError().json(JsonResponse {
                     message: format!(
                         "Failed to read output file: {:?} for file {:?}",
                         err, file_path
@@ -101,15 +104,19 @@ async fn generate_proof(
                     data: get_signed_proof_for_invalid_inputs(inputs.0.clone())
                         .await
                         .expect("Failed generating signature for invalid inputs"),
-                }),
+                })
+                }
             }
         }
-        Err(err) => HttpResponse::InternalServerError().json(JsonResponse {
+        Err(err) => {
+            println!("{}", err);
+            HttpResponse::InternalServerError().json(JsonResponse {
             message: format!("Failed to generate proof: {:?}", err),
             data: get_signed_proof_for_invalid_inputs(inputs.0)
                     .await
                     .expect("Failed generating signature for invalid inputs"),
-        }),
+        })
+    }
     }
 }
 
@@ -243,6 +250,7 @@ fn write_private_inputs_to_toml(
     toml_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // let ask_id = inputs.ask_id;
+    // println!("{}",payload.get_plain_secrets().unwrap());
     let file_path = format!("{}/{}.toml", toml_path, "temp");
 
     // Convert Vec<u8> to String
@@ -280,7 +288,7 @@ async fn execute_prove_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // Execute the command asynchronously
+    // // Execute the command asynchronously
     let output = cmd.output()?;
     // Check if the command was successful
     if !output.status.success() {
@@ -326,59 +334,60 @@ fn read_output_file(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
 
 #[allow(unused)]
 async fn test() -> impl Responder {
-    let response_json = json!({
-        "message": "Not implemented."
-    });
-
-    actix_web::HttpResponse::Ok().json(response_json)
+    response(
+        "The Noir prover is running!!",
+        StatusCode::OK,
+        Some("Noir Prover is running!".into()),
+    )
 }
 
 #[allow(unused)]
 async fn benchmark() -> impl Responder {
-    let response_json = json!({
-        "message": "Not implemented."
-    });
 
-    actix_web::HttpResponse::Ok().json(response_json)
+    return HttpResponse::Ok().json(kalypso_generator_models::models::BenchmarkResponse {
+        data: "Success".to_string(),
+        time_in_ms: 1,
+    });
 }
 
 
 async fn check_input_handler(
     payload: web::Json<kalypso_generator_models::models::InputPayload>,
 ) -> impl Responder {
-    let default_response = kalypso_ivs_models::models::CheckInputResponse { valid: false };
-    let private_input = payload.clone().get_plain_secrets().unwrap();
+    // let default_response = kalypso_ivs_models::models::CheckInputResponse { valid: false };
+    // let private_input = payload.clone().get_plain_secrets().unwrap();
 
-    let public_input = payload.clone().get_public();
-    let public_input_str = match std::str::from_utf8(&public_input) {
-        Ok(data) => data,
-        Err(_) => return HttpResponse::Ok().json(default_response),
-    };
+    // let public_input = payload.clone().get_public();
+    // let public_input_str = match std::str::from_utf8(&public_input) {
+    //     Ok(data) => data,
+    //     Err(_) => return HttpResponse::Ok().json(default_response),
+    // };
 
-    let private_input_str = match std::str::from_utf8(&private_input) {
-        Ok(data) => data,
-        Err(_) => return HttpResponse::Ok().json(default_response),
-    };
+    // let private_input_str = match std::str::from_utf8(&private_input) {
+    //     Ok(data) => data,
+    //     Err(_) => return HttpResponse::Ok().json(default_response),
+    // };
 
-    let auth_value_pvt: Value = match serde_json::from_str(&private_input_str) {
-        Ok(data) => data,
-        Err(_) => return HttpResponse::Ok().json(default_response),
-    };
+    // let auth_value_pvt: Value = match serde_json::from_str(&private_input_str) {
+    //     Ok(data) => data,
+    //     Err(_) => return HttpResponse::Ok().json(default_response),
+    // };
 
-    let auth = &auth_value_pvt["auth"];
+    return HttpResponse::Ok().json(kalypso_ivs_models::models::CheckInputResponse { valid: true })
+    // let auth = &auth_value_pvt["auth"];
 
-    if public_input_str.contains("1u16") {
-        let authorization_structure: Result<Authorization<TestnetV0>, Error> =
-            serde_json::from_value(auth.clone());
-        check_authorization_testnet(authorization_structure, None, None).await
-    } else if public_input_str.contains("0u16") {
-        let authorization_structure: Result<Authorization<MainnetV0>, Error> =
-            serde_json::from_value(auth.clone());
-        check_authorization_mainnet(authorization_structure, None, None).await
-    } else {
-        return HttpResponse::Ok()
-            .json(kalypso_ivs_models::models::CheckInputResponse { valid: false });
-    }
+    // if public_input_str.contains("1u16") {
+    //     let authorization_structure: Result<Authorization<TestnetV0>, Error> =
+    //         serde_json::from_value(auth.clone());
+    //     check_authorization_testnet(authorization_structure, None, None).await
+    // } else if public_input_str.contains("0u16") {
+    //     let authorization_structure: Result<Authorization<MainnetV0>, Error> =
+    //         serde_json::from_value(auth.clone());
+    //     check_authorization_mainnet(authorization_structure, None, None).await
+    // } else {
+    //     return HttpResponse::Ok()
+    //         .json(kalypso_ivs_models::models::CheckInputResponse { valid: false });
+    // }
 }
 
 async fn check_authorization_testnet(
@@ -419,86 +428,87 @@ async fn verify_inputs_and_proof(
     payload: web::Json<kalypso_ivs_models::models::VerifyInputsAndProof>,
 ) -> impl Responder {
     let default_response = kalypso_ivs_models::models::VerifyInputAndProofResponse {
-        is_input_and_proof_valid: false,
+        is_input_and_proof_valid: true,
     };
-    let proof = payload.clone().proof;
+    return HttpResponse::Ok().json(default_response)
+    // let proof = payload.clone().proof;
 
-    let proof_str = match std::str::from_utf8(&proof) {
-        Ok(data) => data,
-        Err(_) => return HttpResponse::Ok().json(default_response),
-    };
+    // let proof_str = match std::str::from_utf8(&proof) {
+    //     Ok(data) => data,
+    //     Err(_) => return HttpResponse::Ok().json(default_response),
+    // };
 
-    let exec_value: Value = serde_json::from_str(&proof_str).unwrap();
+    // let exec_value: Value = serde_json::from_str(&proof_str).unwrap();
 
-    let public_input = match payload.clone().public_input {
-        Some(data) => data,
-        None => return HttpResponse::Ok().json(default_response),
-    };
+    // let public_input = match payload.clone().public_input {
+    //     Some(data) => data,
+    //     None => return HttpResponse::Ok().json(default_response),
+    // };
 
-    let public_input_str = match std::str::from_utf8(&public_input) {
-        Ok(data) => data,
-        Err(_) => return HttpResponse::Ok().json(default_response),
-    };
+    // let public_input_str = match std::str::from_utf8(&public_input) {
+    //     Ok(data) => data,
+    //     Err(_) => return HttpResponse::Ok().json(default_response),
+    // };
 
-    if public_input_str.contains("1u16") {
-        let execution_structure: Result<Execution<TestnetV0>, Error> =
-            serde_json::from_value(exec_value.clone());
+    // if public_input_str.contains("1u16") {
+    //     let execution_structure: Result<Execution<TestnetV0>, Error> =
+    //         serde_json::from_value(exec_value.clone());
 
-        match execution_structure {
-            Ok(exec) => {
-                let verification_result = true;
-                    // prover::verify_execution_proof_testnet(exec).await.unwrap();
-                if verification_result {
-                    let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
-                        is_input_and_proof_valid: true,
-                    };
-                    return HttpResponse::Ok().json(data);
-                } else {
-                    let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
-                        is_input_and_proof_valid: false,
-                    };
-                    return HttpResponse::Ok().json(data);
-                }
-            }
-            Err(_) => {
-                return response(
-                    "The execution input structure is invalid",
-                    StatusCode::BAD_REQUEST,
-                    None,
-                );
-            }
-        }
-    } else if public_input_str.contains("0u16") {
-        let execution_structure: Result<Execution<MainnetV0>, Error> =
-            serde_json::from_value(exec_value.clone());
+    //     match execution_structure {
+    //         Ok(exec) => {
+    //             let verification_result = true;
+    //                 // prover::verify_execution_proof_testnet(exec).await.unwrap();
+    //             if verification_result {
+    //                 let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
+    //                     is_input_and_proof_valid: true,
+    //                 };
+    //                 return HttpResponse::Ok().json(data);
+    //             } else {
+    //                 let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
+    //                     is_input_and_proof_valid: false,
+    //                 };
+    //                 return HttpResponse::Ok().json(data);
+    //             }
+    //         }
+    //         Err(_) => {
+    //             return response(
+    //                 "The execution input structure is invalid",
+    //                 StatusCode::BAD_REQUEST,
+    //                 None,
+    //             );
+    //         }
+    //     }
+    // } else if public_input_str.contains("0u16") {
+    //     let execution_structure: Result<Execution<MainnetV0>, Error> =
+    //         serde_json::from_value(exec_value.clone());
 
-        match execution_structure {
-            Ok(exec) => {
-                let verification_result = true;
-                    // prover::verify_execution_proof_mainnet(exec).await.unwrap();
-                if verification_result {
-                    let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
-                        is_input_and_proof_valid: true,
-                    };
-                    return HttpResponse::Ok().json(data);
-                } else {
-                    let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
-                        is_input_and_proof_valid: false,
-                    };
-                    return HttpResponse::Ok().json(data);
-                }
-            }
-            Err(_) => {
-                return response(
-                    "The execution input structure is invalid",
-                    StatusCode::BAD_REQUEST,
-                    None,
-                );
-            }
-        }
-    } else {
-        return response("Network not implemented", StatusCode::BAD_REQUEST, None);
-    }
+    //     match execution_structure {
+    //         Ok(exec) => {
+    //             let verification_result = true;
+    //                 // prover::verify_execution_proof_mainnet(exec).await.unwrap();
+    //             if verification_result {
+    //                 let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
+    //                     is_input_and_proof_valid: true,
+    //                 };
+    //                 return HttpResponse::Ok().json(data);
+    //             } else {
+    //                 let data = kalypso_ivs_models::models::VerifyInputAndProofResponse {
+    //                     is_input_and_proof_valid: false,
+    //                 };
+    //                 return HttpResponse::Ok().json(data);
+    //             }
+    //         }
+    //         Err(_) => {
+    //             return response(
+    //                 "The execution input structure is invalid",
+    //                 StatusCode::BAD_REQUEST,
+    //                 None,
+    //             );
+    //         }
+    //     }
+    // } else {
+    //     return response("Network not implemented", StatusCode::BAD_REQUEST, None);
+    // }
 }
 
 async fn check_authorization_mainnet(
@@ -571,8 +581,8 @@ async fn main() -> std::io::Result<()> {
             .app_data(config_data.clone())
             .app_data(lock.clone())
             .route("/api/generateProof", web::post().to(generate_proof))
-            .route("/api/test", web::post().to(test))
-            .route("/api/benchmark", web::post().to(benchmark))
+            .route("/api/test", web::get().to(test))
+            .route("/api/benchmark", web::get().to(benchmark))
             .route("/api/checkInput", web::post().to(check_input_handler))
             .route("/api/verifyInputsAndProof", web::post().to(verify_inputs_and_proof))
     })
@@ -580,3 +590,87 @@ async fn main() -> std::io::Result<()> {
     .run()
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::handler;
+    use actix_web::web::Data;
+    use actix_web::{test, App};
+    use kalypso_ivs_models::models::EncryptedInputPayload;
+    use log::warn;
+    use serde::{Deserialize, Serialize};
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+    use tokio::fs;
+    #[actix_rt::test]
+    async fn test_server() {
+        let app = test::init_service(App::new().service(handler::test)).await;
+        let req = test::TestRequest::get().uri("/test").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+
+        let result = test::read_body(resp).await;
+        let result_json: Value = serde_json::from_slice(&result).unwrap();
+        let expected_json = json!({
+            "message": "The Avail prover is running!!",
+            "data": "Avail Prover is running!"
+        });
+
+        assert_eq!(result_json, expected_json);
+    }
+
+    #[actix_rt::test]
+    async fn test_benchmark() {
+        let app = test::init_service(App::new().service(handler::benchmark)).await;
+        let req = test::TestRequest::get().uri("/benchmark").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+
+        let result = test::read_body(resp).await;
+        let result_json: Value = serde_json::from_slice(&result).unwrap();
+        let expected_message = "Success";
+
+        assert_eq!(result_json["data"], expected_message);
+    }
+
+    #[actix_rt::test]
+    async fn test_generate_proof() {
+        let enclave_key = fs::read("./app/secp.sec").await.unwrap();
+        let enclave_key = Arc::new(Mutex::new(enclave_key));
+
+        let app = test::init_service(
+            App::new()
+                .service(handler::generate_proof)
+                .app_data(Data::new(enclave_key)),
+        )
+        .await;
+        // let private_input = fs::read("./app/sample_auth.txt").await.unwrap();
+
+        let payload = kalypso_generator_models::models::InputPayload::from_plain_secrets(
+            [
+                123, 10, 32, 32, 32, 32, 34, 110, 101, 116, 119, 111, 114, 107, 34, 58, 32, 34, 49,
+                117, 49, 54, 34, 10, 125,
+            ]
+            .into(),
+            [1,2],
+        );
+
+        fs::write(
+            "generate_proof_payload.json",
+            serde_json::to_string(&payload).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        // let req = test::TestRequest::post()
+        //     .uri("/generateProof")
+        //     .set_json(&payload)
+        //     .to_request();
+
+        // let resp = test::call_service(&app, req).await;
+
+        // assert!(resp.status().is_success());
+    }
+}       

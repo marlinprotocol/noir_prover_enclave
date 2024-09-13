@@ -4,7 +4,7 @@ FROM ubuntu:22.04
 # Install dependency tools
 RUN apt-get update && apt-get install -y \
     net-tools iptables iproute2 wget bash git curl \
-    libc++1 libc++abi1 && \
+    libc++1 libc++abi1 jq && \
     rm -rf /var/lib/apt/lists/*
 
 # Install noirup
@@ -53,7 +53,7 @@ RUN chmod +x setup.sh generator-client kalypso-listener prover-executable
 # Copy config file (The config file should contain the path to your github repo and project name)
 COPY config.toml ./
 
-COPY ./app/id.pub ./app/id.sec ./app/secp.pub ./app/secp.sec ./
+# COPY ./app/id.pub ./app/id.sec ./app/secp.pub ./app/secp.sec ./
 
 # entry point
 ENTRYPOINT [ "/app/setup.sh" ]

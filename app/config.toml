@@ -1,0 +1,2 @@
+toml_path = "/app/noir_enclave_setup/hello_world"
+output_path = "/app/noir_enclave_setup/hello_world/proofs"

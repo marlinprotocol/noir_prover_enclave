@@ -1,0 +1,2 @@
+toml_path = "/home/ubuntu/noir_enclave_setup/hello_world"
+output_path = "/home/ubuntu/noir_enclave_setup/hello_world/target/hello_world.proof"
